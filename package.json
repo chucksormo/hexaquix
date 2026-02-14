@@ -1,0 +1,12 @@
+{
+  "name": "hexaquiz",
+  "version": "1.0.0",
+  "description": "HexaQuiz – Multiplayer hexagonal quiz race game",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
