@@ -322,7 +322,7 @@ function onMsg(m){
 function renderRoom(m){
   const el=document.getElementById('rpl');el.innerHTML='';
   m.players.forEach(p=>{const c=pCol(p.idx);el.innerHTML+=`<div class="rp"><span class="rp-d" style="background:${c.c}"></span><span class="rp-n" style="color:${c.c}">${p.name}</span>${p.idx===m.hostIdx?'<span class="rp-h">HOST</span>':''}</div>`});
-  document.getElementById('rinfo').textContent=m.players.length+' player'+(m.players.length!==1?'s')+' in room';
+  document.getElementById('rinfo').textContent=m.players.length+' player'+(m.players.length!==1?'s':'')+' in room';
   document.getElementById('theme-show').textContent='🎯 Theme: '+m.theme;
   const me=m.players.find(p=>p.name===myName);if(me)myIdx=me.idx;
   const isHost=me&&me.idx===m.hostIdx;
