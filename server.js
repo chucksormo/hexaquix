@@ -53,24 +53,29 @@ function generateGrid(){
 async function generateQuiz(theme){
   const isNorwegian = /[æøåÆØÅ]/.test(theme) || /norsk|norweg|norge/i.test(theme);
   const lang = isNorwegian ? 'Norwegian' : 'the same language as the theme';
-  const prompt = `Generate exactly 50 fun multiple-choice quiz questions about the theme: "${theme}".
+  const prompt = `Generate at least 50 fun multiple-choice quiz questions about: "${theme}".
 Write all questions and answers in ${lang}.
-Return ONLY valid JSON, no markdown, no explanation.
-Format: {"questions":[{"q":"Question text?","options":["A","B","C","D"],"correct":0}]}
-where "correct" is the 0-based index of the right answer.
-Make questions fun, varied in difficulty, and entertaining. Mix easy and hard.`;
+Return ONLY valid JSON, no markdown, no code fences, no explanation before or after.
+Format: {"questions":[{"q":"Question?","options":["A","B","C","D"],"correct":0}]}
+"correct" = 0-based index of right answer. Each question must have exactly 4 options.
+Make questions fun, varied difficulty, entertaining. You MUST return at least 50 questions.`;
 
+  console.log(`  🧠 Generating quiz for theme: "${theme}"...`);
   const msg = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 8000,
+    max_tokens: 12000,
     messages: [{ role: 'user', content: prompt }],
   });
   const text = msg.content[0].text.trim();
-  // Extract JSON (handle possible markdown wrapping)
   const jsonStr = text.replace(/^```json?\n?/,'').replace(/\n?```$/,'').trim();
   const data = JSON.parse(jsonStr);
-  if (!data.questions || data.questions.length < 50) throw new Error('Not enough questions generated');
-  return data.questions;
+  // Accept 35+ questions (we need 35 for turns + some for duels)
+  const qs = data.questions || [];
+  console.log(`  ✅ Generated ${qs.length} questions`);
+  if (qs.length < 35) throw new Error('Not enough questions: got ' + qs.length);
+  // Pad to 50 if needed by cycling
+  while (qs.length < 50) qs.push(qs[qs.length % 35]);
+  return qs;
 }
 
 /* ═══ WEBSOCKET ═══ */
