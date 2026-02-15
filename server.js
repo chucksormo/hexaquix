@@ -5,7 +5,7 @@ const { WebSocketServer } = require('ws');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const PORT = process.env.PORT || 3000;
-const GRID_RADIUS = 8;
+const GRID_RADIUS = 5;
 const MAX_PLAYERS = 50;
 const SPAWN_TIME = 10000;
 const MOVE_TIME = 10000;
@@ -423,7 +423,7 @@ wss.on('connection',ws=>{
       else{send(ws,{type:'move_rejected'});break}
       room._movesReceived++;
       send(ws,{type:'move_accepted'});
-      bc(room,{type:'player_locked',idx:p.idx}); // show lock icon
+      bcAlive(room,{type:'player_locked',idx:p.idx,locked:room._movesReceived,total:room._moveTarget});
       checkAllMoved(room);
       break;
     }
@@ -431,9 +431,10 @@ wss.on('connection',ws=>{
     case 'submit_answer':{
       const room=ws.room;if(!room||!room.started||room.ended)break;
       const p=getP(room,ws);if(!p||!p.alive)break;
-      if(room._answers[p.idx]!==undefined)break; // already answered
+      if(room._answers[p.idx]!==undefined)break;
       room._answers[p.idx]=msg.answer;
       room._answersReceived++;
+      bcAlive(room,{type:'answer_count',count:room._answersReceived,total:room._answerTarget});
       checkAllAnswered(room);
       break;
     }
