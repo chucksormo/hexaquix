@@ -123,14 +123,12 @@ input.fi:focus{border-color:rgba(102,126,234,.5)}
       <button class="tab" id="tab-join">Join Game</button>
     </div>
     <!-- Create panel -->
-    <div id="p-create">
-      <div style="display:flex;flex-direction:column;gap:10px;width:100%">
-        <input id="i-theme" class="fi" placeholder="Quiz theme (e.g. Harry Potter, 90s nostalgi)" maxlength="80" autocomplete="off">
-        <button id="b-create" class="bt">🎮 Create Room</button>
-      </div>
+    <div id="p-create" style="width:100%;display:flex;flex-direction:column;gap:10px">
+      <input id="i-theme" class="fi" placeholder="Quiz theme (e.g. Harry Potter, 90s nostalgi)" maxlength="80" autocomplete="off">
+      <button id="b-create" class="bt">🎮 Create Room</button>
     </div>
     <!-- Join panel -->
-    <div id="p-join" style="display:none">
+    <div id="p-join" style="width:100%;display:none;flex-direction:column;gap:10px">
       <div class="jr"><input id="i-code" class="fi" placeholder="CODE" maxlength="4" autocomplete="off"><button id="b-join" class="bt">Join →</button></div>
     </div>
   </div>
@@ -259,11 +257,11 @@ function showSec(id){['s-menu','s-room'].forEach(s=>document.getElementById(s).c
 // Tabs
 document.getElementById('tab-create').addEventListener('click',()=>{
   document.getElementById('tab-create').classList.add('active');document.getElementById('tab-join').classList.remove('active');
-  document.getElementById('p-create').style.display='';document.getElementById('p-join').style.display='none';
+  document.getElementById('p-create').style.display='flex';document.getElementById('p-join').style.display='none';
 });
 document.getElementById('tab-join').addEventListener('click',()=>{
   document.getElementById('tab-join').classList.add('active');document.getElementById('tab-create').classList.remove('active');
-  document.getElementById('p-join').style.display='';document.getElementById('p-create').style.display='none';
+  document.getElementById('p-join').style.display='flex';document.getElementById('p-create').style.display='none';
   setTimeout(()=>document.getElementById('i-code').focus(),100);
 });
 
