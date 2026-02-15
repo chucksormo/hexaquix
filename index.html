@@ -245,6 +245,7 @@ let hexGrid=new Map(),hexMeshes=new Map(),rayArr=[],spawnMarkers=[];
 let player=null,opps={},myIdx=0,myName='';
 let pQ=0,pR=0,selectedMove=null,aliveCount=0,turn=0;
 let camTgt=new THREE.Vector3(),camA=Math.PI*.25;
+const _camOff=new THREE.Vector3(),_camLook=new THREE.Vector3();
 let qAns=false,qRAF=0,qST=0,dAns=false,dRAF=0,dST=0;
 let adjHexes=[],spawnIv=null;
 const clock=new THREE.Clock();
@@ -376,8 +377,9 @@ function onGameStart(m){
 }
 
 /* ═══ MOVE PHASE ═══ */
+let moveLocked=false;
 function onMovePhase(m){
-  state='MOVE';selectedMove=null;turn=m.turn;
+  state='MOVE';selectedMove=null;moveLocked=false;turn=m.turn;
   adjHexes=m.adjacent;
   updateHUD(m.turn,m.aliveCount,m.shrinkIn);
   showPhase('🏃 MOVE — Pick a hex! ('+m.time+'s)');
@@ -499,6 +501,7 @@ function goLobby(){
   spawnMarkers.forEach(mk=>scene.remove(mk));spawnMarkers=[];
   tweens.length=0;hexGrid.forEach(h=>{if(h.mesh)scene.remove(h.mesh)});hexMeshes.clear();hexGrid.clear();rayArr=[];
   if(ws){ws.close();ws=null}
+  adjHexes=[];selectedMove=null;moveLocked=false;turn=0;aliveCount=0;
   state='LOBBY';document.getElementById('lobby').classList.remove('h');showSec('s-menu');
 }
 
@@ -541,9 +544,11 @@ renderer.domElement.addEventListener('click',e=>{
     sWS({type:'select_spawn',q,r});return;
   }
   if(state==='MOVE'){
+    if(moveLocked)return;
     const isAdj=adjHexes.some(h=>h.q===q&&h.r===r);
     const isSame=q===pQ&&r===pR;
     if(!isAdj&&!isSame)return;
+    moveLocked=true;
     sWS({type:'submit_move',q,r});
     adjHexes.forEach(h=>{const hex=hexGrid.get(hk(h.q,h.r));if(hex&&hex.mesh)hex.mesh.material.emissiveIntensity=0});
     const sel=hexGrid.get(k);if(sel&&sel.mesh){sel.mesh.material.emissive.set(0x667eea);sel.mesh.material.emissiveIntensity=.3}
@@ -566,7 +571,9 @@ function animate(){
   requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);time+=dt;
   tickTw(dt);
   if(state==='LOBBY'){camA+=dt*.3;camera.position.set(Math.cos(camA)*20,CFG.CAM_H*1.1,Math.sin(camA)*20);camera.lookAt(0,1,0)}
-  else{zoom=lerp(zoom,zoomT,8*dt);const z=1/zoom;const wp=h2w(pQ,pR);const off=new THREE.Vector3(CFG.CAM_D*.7*z,CFG.CAM_H*z,CFG.CAM_D*.7*z);camera.position.lerp(wp.clone().add(off),3.5*dt);camTgt.lerp(new THREE.Vector3(wp.x,1,wp.z),3.5*dt);camera.lookAt(camTgt)}
+  else{zoom=lerp(zoom,zoomT,8*dt);const z=1/zoom;const wp=h2w(pQ,pR);
+    _camOff.set(wp.x+CFG.CAM_D*.7*z,CFG.CAM_H*z,wp.z+CFG.CAM_D*.7*z);camera.position.lerp(_camOff,3.5*dt);
+    _camLook.set(wp.x,1,wp.z);camTgt.lerp(_camLook,3.5*dt);camera.lookAt(camTgt)}
   if(player&&(state==='MOVE'||state==='WAITING'||state==='RESULT')){player.children[0].position.y=.22+Math.sin(time*2.5)*.02;player.children[1].position.y=.61+Math.sin(time*2.5)*.02}
   Object.values(opps).forEach((o,i)=>{if(o.alive&&o.mesh){o.mesh.children[0].position.y=.22+Math.sin(time*2.5+i+1)*.02;o.mesh.children[1].position.y=.61+Math.sin(time*2.5+i+1)*.02}});
   renderer.render(scene,camera);

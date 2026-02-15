@@ -118,6 +118,7 @@ async function startGame(room){
   room.aliveCount=room.players.length;
   room.spawnSelections={};
   room.players.forEach(p=>{p.alive=true;p.q=0;p.r=0;p.pendingMove=null;p.lastAnswer=null});
+  room._inQuestion=false;room._resolved=false;
 
   const roster=room.players.map(p=>({name:p.name,idx:p.idx}));
   bc(room,{type:'spawn_phase',grid:room.grid,players:roster,spawnTime:SPAWN_TIME/1000});
@@ -144,12 +145,13 @@ function finalizeSpawns(room){
 function startTurn(room){
   if(room.ended)return;
   room.turn++;
-  room.players.forEach(p=>{p.pendingMove=null;p.lastAnswer=null});
+  room.players.forEach(p=>{p.pendingMove=null;p.lastAnswer=null;p._moveLocked=false});
   // Move phase
   const alive=room.players.filter(p=>p.alive);
   alive.forEach(p=>{
     const adj=HEX_DIRS.map(d=>({q:p.q+d[0],r:p.r+d[1]})).filter(h=>room.aliveHexes.has(hk(h.q,h.r)));
-    send(p.ws,{type:'move_phase',turn:room.turn,time:MOVE_TIME/1000,adjacent:adj,aliveCount:room.aliveCount,shrinkIn:SHRINK_EVERY-(room.turn%SHRINK_EVERY)});
+    const si=room.turn%SHRINK_EVERY===0?SHRINK_EVERY:SHRINK_EVERY-(room.turn%SHRINK_EVERY);
+    send(p.ws,{type:'move_phase',turn:room.turn,time:MOVE_TIME/1000,adjacent:adj,aliveCount:room.aliveCount,shrinkIn:si});
   });
   room._moveTimer=setTimeout(()=>endMovePhase(room),MOVE_TIME);
   room._movesReceived=0;
@@ -330,6 +332,7 @@ function checkWin(room){
   if(alive.length<=1){
     room.ended=true;
     clearTimeout(room._moveTimer);clearTimeout(room._questionTimer);clearTimeout(room._spawnTimer);
+    if(room._duelMap)Object.values(room._duelMap).forEach(d=>clearTimeout(d.timer));
     if(alive.length===1)send(alive[0].ws,{type:'victory',reason:'Last one standing! 🏆'});
     bc(room,{type:'game_over',winnerIdx:alive[0]?.idx??-1,winnerName:alive[0]?.name??'Nobody'});
     console.log(`  🏆 Room ${room.code}: ${alive[0]?.name||'Nobody'} wins!`);
@@ -341,7 +344,12 @@ function leaveRoom(ws){
   const room=ws.room;if(!room)return;ws.room=null;
   const wasIdx=ws.pidx;
   room.players=room.players.filter(p=>p.ws!==ws);
-  if(!room.players.length){rooms.delete(room.code);clearTimeout(room._moveTimer);clearTimeout(room._questionTimer);clearTimeout(room._spawnTimer);return}
+  if(!room.players.length){
+    rooms.delete(room.code);
+    clearTimeout(room._moveTimer);clearTimeout(room._questionTimer);clearTimeout(room._spawnTimer);
+    if(room._duelMap)Object.values(room._duelMap).forEach(d=>clearTimeout(d.timer));
+    return;
+  }
   if(!room.started){
     room.players.forEach((p,i)=>{p.idx=i;p.ws.pidx=i});room.hostIdx=0;
     sendRoomUpdate(room);
@@ -416,11 +424,12 @@ wss.on('connection',ws=>{
     case 'submit_move':{
       const room=ws.room;if(!room||!room.started||room.ended)break;
       const p=getP(room,ws);if(!p||!p.alive)break;
+      if(p._moveLocked){send(ws,{type:'move_rejected'});break} // already locked
       const{q,r}=msg;
-      // Validate adjacent or same hex
       if(q===p.q&&r===p.r){p.pendingMove=null;} // stay
       else if(hd(q,r,p.q,p.r)===1&&room.aliveHexes.has(hk(q,r))){p.pendingMove={q,r}}
       else{send(ws,{type:'move_rejected'});break}
+      p._moveLocked=true;
       room._movesReceived++;
       send(ws,{type:'move_accepted'});
       bcAlive(room,{type:'player_locked',idx:p.idx,locked:room._movesReceived,total:room._moveTarget});
