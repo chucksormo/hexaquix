@@ -130,6 +130,7 @@ input.fi:focus{border-color:rgba(102,126,234,.5)}
     <!-- Create panel -->
     <div id="p-create" style="width:100%;display:flex;flex-direction:column;gap:10px">
       <input id="i-theme" class="fi" placeholder="Quiz theme (e.g. Harry Potter, 90s nostalgi)" maxlength="80" autocomplete="off">
+      <div class="tabs" style="margin:0"><button class="tab active" id="mt-royale">⚔️ Royale</button><button class="tab" id="mt-race">🏁 Race</button></div>
       <button id="b-create" class="bt">🎮 Create Room</button>
     </div>
     <!-- Join panel -->
@@ -275,10 +276,13 @@ document.getElementById('tab-join').addEventListener('click',()=>{
 document.getElementById('i-name').addEventListener('keydown',e=>{if(e.key==='Enter'){if(document.getElementById('p-create').style.display!=='none')document.getElementById('b-create').click();else document.getElementById('b-join').click()}});
 document.getElementById('i-code').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('b-join').click()});
 
+let createMode='royale';
+document.getElementById('mt-royale').addEventListener('click',()=>{createMode='royale';document.getElementById('mt-royale').classList.add('active');document.getElementById('mt-race').classList.remove('active')});
+document.getElementById('mt-race').addEventListener('click',()=>{createMode='race';document.getElementById('mt-race').classList.add('active');document.getElementById('mt-royale').classList.remove('active')});
 document.getElementById('b-create').addEventListener('click',()=>{
   const n=document.getElementById('i-name').value.trim();if(!n){document.getElementById('i-name').focus();toast('Enter your name!');return}
   const t=document.getElementById('i-theme').value.trim()||'General Knowledge';
-  myName=n;connectWS(()=>sWS({type:'create_room',name:n,theme:t}));
+  myName=n;connectWS(()=>sWS({type:'create_room',name:n,theme:t,mode:createMode}));
 });
 document.getElementById('b-join').addEventListener('click',()=>{
   const n=document.getElementById('i-name').value.trim();if(!n){document.getElementById('i-name').focus();toast('Enter your name!');return}
@@ -323,6 +327,12 @@ function onMsg(m){
     case'victory':onVictory(m);break;
     case'game_over':onGameOver(m);break;
     case'player_left':onPlayerLeft(m);break;
+    // Race mode
+    case'race_start':onRaceStart(m);break;
+    case'race_question':onRaceQuestion(m);break;
+    case'race_resolve':onRaceResolve(m);break;
+    case'race_duel_lost':toast('⚔️ Back to step '+m.pos,2000);break;
+    case'race_pos_update':onRacePosUpdate(m);break;
   }
 }
 
@@ -330,7 +340,8 @@ function renderRoom(m){
   const el=document.getElementById('rpl');el.innerHTML='';
   m.players.forEach(p=>{const c=pCol(p.idx);el.innerHTML+=`<div class="rp"><span class="rp-d" style="background:${c.c}"></span><span class="rp-n" style="color:${c.c}">${p.name}</span>${p.idx===m.hostIdx?'<span class="rp-h">HOST</span>':''}</div>`});
   document.getElementById('rinfo').textContent=m.players.length+' player'+(m.players.length!==1?'s':'')+' in room';
-  document.getElementById('theme-show').textContent='🎯 Theme: '+m.theme;
+  const modeLabel=m.mode==='race'?'🏁 Race':'⚔️ Royale';
+  document.getElementById('theme-show').textContent=modeLabel+' · '+m.theme;
   const me=m.players.find(p=>p.name===myName);if(me)myIdx=me.idx;
   const isHost=me&&me.idx===m.hostIdx;
   document.getElementById('host-ctrls').style.display=isHost?'':'none';
@@ -529,6 +540,8 @@ function goLobby(){
   ['win-s','elim-s','over-s'].forEach(id=>document.getElementById(id).classList.add('h'));
   hideGame();if(player){scene.remove(player);player=null}Object.values(opps).forEach(o=>{if(o.mesh)scene.remove(o.mesh)});opps={};
   spawnMarkers.forEach(mk=>scene.remove(mk));spawnMarkers=[];
+  raceTiles.forEach(t=>{if(t.mesh)scene.remove(t.mesh)});raceTiles=[];
+  Object.values(raceChars).forEach(rc=>{if(rc.mesh)scene.remove(rc.mesh)});raceChars={};
   tweens.length=0;hexGrid.forEach(h=>{if(h.mesh)scene.remove(h.mesh)});hexMeshes.clear();hexGrid.clear();rayArr=[];
   if(ws){ws.close();ws=null}
   adjHexes=[];selectedMove=null;moveLocked=false;turn=0;aliveCount=0;
@@ -553,6 +566,121 @@ function buildGrid(raw){
 }
 function animEntry(){hexGrid.forEach(h=>{const m=h.mesh,t=h.baseY;m.position.y=-8;tw(.6,eOB,p=>{m.position.y=lerp(-8,t,p)},null,hexDist(h.q,h.r,0,0)*.05+Math.random()*.03)})}
 function mkChar(bc,hc){const g=new THREE.Group();g.add(new THREE.Mesh(new THREE.BoxGeometry(.34,.44,.34),new THREE.MeshLambertMaterial({color:bc})).translateY(.22));g.add(new THREE.Mesh(new THREE.BoxGeometry(.38,.34,.38),new THREE.MeshLambertMaterial({color:0xFFDFC4})).translateY(.61));const eM=new THREE.MeshBasicMaterial({color:0x111}),eG=new THREE.BoxGeometry(.07,.08,.04);g.add(new THREE.Mesh(eG,eM).translateX(-.09).translateY(.64).translateZ(.19));g.add(new THREE.Mesh(eG,eM).translateX(.09).translateY(.64).translateZ(.19));g.add(new THREE.Mesh(new THREE.BoxGeometry(.42,.1,.42),new THREE.MeshLambertMaterial({color:hc})).translateY(.83));return g}
+
+/* ═══ RACE MODE ═══ */
+let raceLanes=[],raceChars={},raceTiles=[];
+const TILE_W=1.1,TILE_D=1.1,LANE_GAP=.3;
+
+function buildRaceTrack(players,steps){
+  // Clear old scene objects
+  hexGrid.forEach(h=>{if(h.mesh)scene.remove(h.mesh)});hexMeshes.clear();hexGrid.clear();rayArr=[];
+  raceLanes=players;raceTiles=[];raceChars={};
+  const nPlayers=players.length;
+  const totalW=nPlayers*(TILE_W+LANE_GAP)-LANE_GAP;
+  const startX=-totalW/2+TILE_W/2;
+
+  for(let li=0;li<nPlayers;li++){
+    const px=startX+li*(TILE_W+LANE_GAP);
+    const col=pCol(players[li].idx);
+    for(let s=0;s<=steps;s++){
+      const pz=-(s*TILE_D*1.05);
+      const isFinish=s===steps;
+      const tileCol=isFinish?0xFFD700:new THREE.Color(col.c).getHex();
+      const g=new THREE.BoxGeometry(TILE_W,.15,TILE_D);
+      const mat=new THREE.MeshLambertMaterial({color:tileCol,emissive:0x000000});
+      if(!isFinish)mat.color.multiplyScalar(.5+.5*(s/steps));
+      const mesh=new THREE.Mesh(g,mat);
+      mesh.position.set(px,.075,pz);mesh.receiveShadow=true;scene.add(mesh);
+      raceTiles.push({mesh,lane:li,step:s});
+      // Entrance animation
+      const ty=mesh.position.y;mesh.position.y=-5;
+      tw(.5,eOB,t=>{mesh.position.y=lerp(-5,ty,t)},null,s*.03+li*.05);
+    }
+    // Step numbers on the side
+    // Player character
+    const ch=mkChar(col.b,col.h);
+    ch.position.set(px,CFG.HEX_HEIGHT,0);scene.add(ch);
+    // Drop animation
+    ch.position.y=CFG.HEX_HEIGHT+4;
+    tw(.6,eOB,t=>{ch.position.y=lerp(CFG.HEX_HEIGHT+4,CFG.HEX_HEIGHT,t)},null,.3+li*.1);
+    raceChars[players[li].idx]={mesh:ch,lane:li,pos:0,x:px};
+    if(players[li].idx===myIdx)player=ch;
+  }
+  // Finish line banner (simple bar above step 10)
+  const banner=new THREE.Mesh(new THREE.BoxGeometry(totalW+.5,.08,.15),new THREE.MeshLambertMaterial({color:0xFFD600,emissive:0xFFAA00,emissiveIntensity:.5}));
+  banner.position.set(0,.8,-(steps*TILE_D*1.05));scene.add(banner);
+  raceTiles.push({mesh:banner,lane:-1,step:-1}); // track for cleanup
+}
+
+function raceCharToPos(idx,pos,animate){
+  const rc=raceChars[idx];if(!rc)return;
+  const targetZ=-(pos*TILE_D*1.05);
+  if(animate){
+    const fromZ=rc.mesh.position.z,fromY=rc.mesh.position.y;
+    tw(.4,eOC,t=>{
+      rc.mesh.position.z=lerp(fromZ,targetZ,t);
+      rc.mesh.position.y=CFG.HEX_HEIGHT+Math.sin(t*Math.PI)*1.2;
+      const s=1+Math.sin(t*Math.PI)*.1;rc.mesh.scale.set(1/s,s,1/s);
+    },()=>{rc.mesh.scale.set(1,1,1);rc.mesh.position.y=CFG.HEX_HEIGHT});
+  } else {
+    rc.mesh.position.z=targetZ;
+  }
+  rc.pos=pos;
+}
+
+function onRaceStart(m){
+  document.getElementById('loading').classList.add('h');
+  state='RACE_WAITING';gm='race';opps={};
+  buildRaceTrack(m.players,m.steps);
+  m.players.forEach(p=>{if(p.idx!==myIdx)opps[p.idx]={name:p.name,pos:0,alive:true}});
+  pQ=0;pR=0; // reuse for camera target
+  document.getElementById('hud').classList.remove('h');
+  document.getElementById('h-turn').textContent='0';
+  document.getElementById('h-alive').textContent=m.players.length;
+  document.getElementById('h-shrink').parentElement.querySelector('.hl').textContent='Steps';
+  document.getElementById('h-shrink').textContent=m.steps;
+  // Position camera for race view
+  zoomT=.8;
+}
+
+function onRaceQuestion(m){
+  state='QUESTION';qAns=false;
+  startPhaseTimer(m.time);
+  showPhase('📝 Question #'+m.qNum);
+  document.getElementById('q-turn').textContent='Q'+m.qNum;
+  document.getElementById('q-count').textContent='0/? answered';
+  document.getElementById('q-q').textContent=m.q;
+  const div=document.getElementById('q-a');div.innerHTML='';
+  m.options.forEach((o,i)=>{const b=document.createElement('button');b.className='ab';b.textContent=(i+1)+'. '+o;b.addEventListener('click',()=>ansQ(i));div.appendChild(b)});
+  document.getElementById('q-tf').style.width='100%';
+  document.getElementById('qp').classList.remove('h');
+  qST=performance.now();tickQT(m.time);
+}
+
+function onRaceResolve(m){
+  state='RACE_WAITING';stopPhaseTimer();
+  // Show correct/wrong on quiz panel
+  document.querySelectorAll('#q-a .ab').forEach((b,j)=>{if(j===m.correctAnswer)b.classList.add('ok');else if(b.classList.contains('sel'))b.classList.add('no')});
+  setTimeout(()=>document.getElementById('qp').classList.add('h'),1200);
+  // Animate position changes
+  let myCorrect=false;
+  m.results.forEach(r=>{
+    raceCharToPos(r.idx,r.newPos,true);
+    if(r.idx===myIdx)myCorrect=r.correct;
+    // Update opponents
+    if(opps[r.idx])opps[r.idx].pos=r.newPos;
+  });
+  const correctCount=m.results.filter(r=>r.correct).length;
+  const wrongCount=m.results.filter(r=>r.answered&&!r.correct).length;
+  showPhase('✅ '+correctCount+' right · ❌ '+wrongCount+' wrong');
+  document.getElementById('h-turn').textContent=m.qNum;
+}
+
+function onRacePosUpdate(m){
+  raceCharToPos(m.idx,m.pos,true);
+  if(opps[m.idx])opps[m.idx].pos=m.pos;
+  toast(m.reason,2000);
+}
 
 /* ═══ INPUT ═══ */
 let lastRay=0;
@@ -623,11 +751,21 @@ function animate(){
   requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);time+=dt;
   tickTw(dt);
   if(state==='LOBBY'){camA+=dt*.3;camera.position.set(Math.cos(camA)*20,CFG.CAM_H*1.1,Math.sin(camA)*20);camera.lookAt(0,1,0)}
-  else{zoom=lerp(zoom,zoomT,8*dt);const z=1/zoom;const wp=h2w(pQ,pR);
+  else if(gm==='race'){
+    // Race camera: angled view looking down the track
+    zoom=lerp(zoom,zoomT,8*dt);const z=1/zoom;
+    const rc=raceChars[myIdx];const mz=rc?-(rc.pos*TILE_D*1.05):0;
+    _camOff.set(0,10*z,mz+8*z);camera.position.lerp(_camOff,3*dt);
+    _camLook.set(0,.5,mz-3);camTgt.lerp(_camLook,3*dt);camera.lookAt(camTgt);
+  } else{zoom=lerp(zoom,zoomT,8*dt);const z=1/zoom;const wp=h2w(pQ,pR);
     _camOff.set(wp.x+CFG.CAM_D*.7*z,CFG.CAM_H*z,wp.z+CFG.CAM_D*.7*z);camera.position.lerp(_camOff,3.5*dt);
     _camLook.set(wp.x,1,wp.z);camTgt.lerp(_camLook,3.5*dt);camera.lookAt(camTgt)}
-  if(player&&(state==='MOVE'||state==='WAITING'||state==='RESULT')){player.children[0].position.y=.22+Math.sin(time*2.5)*.02;player.children[1].position.y=.61+Math.sin(time*2.5)*.02}
-  Object.values(opps).forEach((o,i)=>{if(o.alive&&o.mesh){o.mesh.children[0].position.y=.22+Math.sin(time*2.5+i+1)*.02;o.mesh.children[1].position.y=.61+Math.sin(time*2.5+i+1)*.02}});
+  if(gm==='race'){
+    Object.values(raceChars).forEach((rc,i)=>{if(rc.mesh){rc.mesh.children[0].position.y=.22+Math.sin(time*2.5+i)*.02;rc.mesh.children[1].position.y=.61+Math.sin(time*2.5+i)*.02}});
+  } else {
+    if(player&&(state==='MOVE'||state==='WAITING'||state==='RESULT')){player.children[0].position.y=.22+Math.sin(time*2.5)*.02;player.children[1].position.y=.61+Math.sin(time*2.5)*.02}
+    Object.values(opps).forEach((o,i)=>{if(o.alive&&o.mesh){o.mesh.children[0].position.y=.22+Math.sin(time*2.5+i+1)*.02;o.mesh.children[1].position.y=.61+Math.sin(time*2.5+i+1)*.02}});
+  }
   renderer.render(scene,camera);
 }
 animate();

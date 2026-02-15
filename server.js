@@ -12,7 +12,9 @@ const MOVE_TIME = 10000;
 const QUESTION_TIME = 10000;
 const DUEL_TIME = 10000;
 const RESULT_TIME = 2500;
-const SHRINK_EVERY = 3; // shrink every N turns
+const SHRINK_EVERY = 3;
+const RACE_STEPS = 10;
+const RACE_QUESTION_TIME = 10000;
 
 const anthropic = new Anthropic.default();
 const HEX_DIRS = [[1,0],[-1,0],[0,1],[0,-1],[1,-1],[-1,1]];
@@ -89,7 +91,7 @@ function getP(room,ws){return room.players.find(p=>p.ws===ws)}
 
 function sendRoomUpdate(room){
   const pl=room.players.map(p=>({name:p.name,idx:p.idx}));
-  bc(room,{type:'room_update',code:room.code,hostIdx:room.hostIdx,players:pl,theme:room.theme});
+  bc(room,{type:'room_update',code:room.code,mode:room.mode,hostIdx:room.hostIdx,players:pl,theme:room.theme});
 }
 
 /* ═══ GAME FLOW ═══ */
@@ -339,6 +341,147 @@ function checkWin(room){
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   RACE MODE
+   ═══════════════════════════════════════════════════════════════ */
+async function startRaceGame(room){
+  room.started=true;
+  bc(room,{type:'generating_quiz',theme:room.theme});
+  try{room.questions=await generateQuiz(room.theme)}catch(e){
+    console.error('Quiz gen failed:',e.message);room.started=false;
+    bc(room,{type:'room_error',msg:'Quiz generation failed! Try a different theme.'});return;
+  }
+  room.raceQuestions=room.questions.slice(0,40);
+  room.duelQuestions=room.questions.slice(40);
+  room.duelQIdx=0;
+  room.raceQIdx=0;
+  room.ended=false;
+  room._duelMap={};room._activeDuels=0;
+  room.players.forEach(p=>{p.alive=true;p.pos=0;});
+
+  const roster=room.players.map(p=>({name:p.name,idx:p.idx}));
+  bc(room,{type:'race_start',players:roster,steps:RACE_STEPS});
+  setTimeout(()=>raceNextQuestion(room),2000);
+  console.log(`  🏁 Room ${room.code} [race] started – ${room.players.length} players`);
+}
+
+function raceNextQuestion(room){
+  if(room.ended)return;
+  const q=room.raceQuestions[room.raceQIdx%room.raceQuestions.length];
+  room.raceQIdx++;
+  room._currentQ=q;
+  room._answers={};room._answersReceived=0;
+  const alive=room.players.filter(p=>p.alive);
+  room._answerTarget=alive.length;
+  alive.forEach(p=>send(p.ws,{type:'race_question',q:q.q,options:q.options,time:RACE_QUESTION_TIME/1000,qNum:room.raceQIdx}));
+  room._questionTimer=setTimeout(()=>resolveRace(room),RACE_QUESTION_TIME);
+}
+
+function resolveRace(room){
+  if(room.ended||room._raceResolved)return;
+  room._raceResolved=true;
+  const q=room._currentQ;
+  const correct=q.correct;
+  const results=[];
+  const atFinish=[];
+
+  room.players.filter(p=>p.alive).forEach(p=>{
+    const ans=room._answers[p.idx];
+    const gotRight=ans===correct;
+    const oldPos=p.pos;
+    if(gotRight)p.pos=Math.min(RACE_STEPS,p.pos+1);
+    else if(ans!==undefined)p.pos=Math.max(0,p.pos-1); // wrong = back. no answer = stay
+    results.push({idx:p.idx,name:p.name,correct:gotRight,answered:ans!==undefined,oldPos,newPos:p.pos});
+    if(p.pos>=RACE_STEPS)atFinish.push(p.idx);
+  });
+
+  bc(room,{type:'race_resolve',results,correctAnswer:correct,qNum:room.raceQIdx});
+
+  if(atFinish.length===1){
+    // Single winner!
+    room.ended=true;
+    const w=room.players.find(p=>p.idx===atFinish[0]);
+    send(w.ws,{type:'victory',reason:'🏆 First to the finish!'});
+    bc(room,{type:'game_over',winnerIdx:w.idx,winnerName:w.name});
+    console.log(`  🏆 Room ${room.code} race: ${w.name} wins!`);
+  } else if(atFinish.length>1){
+    // Tie at finish → duel
+    setTimeout(()=>raceFinishDuel(room,atFinish),2000);
+  } else {
+    // Continue
+    room._raceResolved=false;
+    setTimeout(()=>raceNextQuestion(room),3000);
+  }
+}
+
+function raceFinishDuel(room,tiedIdxs){
+  if(room.ended)return;
+  // If more than 2, pair them; extras wait
+  room._activeDuels=0;room._duelMap={};
+  while(tiedIdxs.length>=2){
+    const i1=tiedIdxs.shift(),i2=tiedIdxs.shift();
+    const p1=room.players.find(p=>p.idx===i1),p2=room.players.find(p=>p.idx===i2);
+    if(!p1||!p2)continue;
+    room._activeDuels++;
+    const duelKey='race_'+i1+'_'+i2;
+    const q=room.duelQuestions[room.duelQIdx%room.duelQuestions.length];room.duelQIdx++;
+    room._duelMap[duelKey]={p1:i1,p2:i2,q,ans:{},hexKey:duelKey,
+      timer:setTimeout(()=>duelTimeout(room,duelKey),DUEL_TIME)};
+    send(p1.ws,{type:'duel_start',oppName:p2.name,oppIdx:p2.idx,q:q.q,options:q.options,time:DUEL_TIME/1000});
+    send(p2.ws,{type:'duel_start',oppName:p1.name,oppIdx:p1.idx,q:q.q,options:q.options,time:DUEL_TIME/1000});
+    bc(room,{type:'duel_broadcast',idx1:i1,idx2:i2,names:[p1.name,p2.name]});
+  }
+  // Leftover odd player stays at finish
+  if(room._activeDuels===0){
+    // Everyone dueled, check remaining at finish
+    const stillAtFinish=room.players.filter(p=>p.alive&&p.pos>=RACE_STEPS);
+    if(stillAtFinish.length===1){
+      room.ended=true;
+      send(stillAtFinish[0].ws,{type:'victory',reason:'🏆 Won the finish duel!'});
+      bc(room,{type:'game_over',winnerIdx:stillAtFinish[0].idx,winnerName:stillAtFinish[0].name});
+    } else {
+      room._raceResolved=false;
+      setTimeout(()=>raceNextQuestion(room),2000);
+    }
+  }
+}
+
+// Override checkDuelsDone for race mode duels
+const _origCheckDuelsDone=checkDuelsDone;
+checkDuelsDone=function(room){
+  if(room.mode==='race'&&room._activeDuels<=0){
+    room._duelMap={};
+    // After race duels, loser gets sent back to step 9
+    // Check if single winner at finish
+    const atFinish=room.players.filter(p=>p.alive&&p.pos>=RACE_STEPS);
+    if(atFinish.length===1){
+      room.ended=true;
+      send(atFinish[0].ws,{type:'victory',reason:'🏆 Won the finish duel!'});
+      bc(room,{type:'game_over',winnerIdx:atFinish[0].idx,winnerName:atFinish[0].name});
+    } else if(atFinish.length>1){
+      setTimeout(()=>raceFinishDuel(room,atFinish.map(p=>p.idx)),2000);
+    } else {
+      room._raceResolved=false;
+      setTimeout(()=>raceNextQuestion(room),2000);
+    }
+    return;
+  }
+  _origCheckDuelsDone(room);
+};
+
+// Override eliminatePlayer for race — loser goes back to step 9
+const _origElim=eliminatePlayer;
+eliminatePlayer=function(room,idx,reason){
+  if(room.mode==='race'){
+    const p=typeof idx==='number'?room.players.find(x=>x.idx===idx):null;
+    if(p){p.pos=RACE_STEPS-1;send(p.ws,{type:'race_duel_lost',pos:p.pos});
+      bc(room,{type:'race_pos_update',idx:p.idx,pos:p.pos,reason:'Lost duel – back to step '+(RACE_STEPS-1)});
+    }
+    return;
+  }
+  _origElim(room,idx,reason);
+};
+
 /* ═══ ROOM MANAGEMENT ═══ */
 function leaveRoom(ws){
   const room=ws.room;if(!room)return;ws.room=null;
@@ -372,8 +515,9 @@ wss.on('connection',ws=>{
       if(ws.room)leaveRoom(ws);
       ws.pname=String(msg.name||'Anon').slice(0,16);
       const theme=String(msg.theme||'General Knowledge').slice(0,80);
+      const mode=msg.mode==='race'?'race':'royale';
       const code=genCode();
-      const room={code,theme,hostIdx:0,
+      const room={code,theme,mode,hostIdx:0,
         players:[{ws,name:ws.pname,idx:0,alive:true,q:0,r:0,pendingMove:null,lastAnswer:null}],
         started:false,ended:false,grid:null,questions:null,turnQuestions:null,duelQuestions:null,
         turn:0,safeRadius:GRID_RADIUS,aliveHexes:new Set(),aliveCount:0,spawnSelections:{},
@@ -405,7 +549,8 @@ wss.on('connection',ws=>{
       const room=ws.room;if(!room||room.started)break;
       if(ws.pidx!==room.hostIdx){send(ws,{type:'room_error',msg:'Only host can start!'});break}
       if(room.players.length<2){send(ws,{type:'room_error',msg:'Need at least 2 players!'});break}
-      startGame(room);break;
+      if(room.mode==='race')startRaceGame(room);else startGame(room);
+      break;
     }
     case 'leave_room':{leaveRoom(ws);break}
 
@@ -444,7 +589,9 @@ wss.on('connection',ws=>{
       room._answers[p.idx]=msg.answer;
       room._answersReceived++;
       bcAlive(room,{type:'answer_count',count:room._answersReceived,total:room._answerTarget});
-      checkAllAnswered(room);
+      if(room.mode==='race'){
+        if(room._answersReceived>=room._answerTarget){clearTimeout(room._questionTimer);resolveRace(room)}
+      } else checkAllAnswered(room);
       break;
     }
 
