@@ -1,12 +1,13 @@
 {
   "name": "hexaquiz",
-  "version": "1.0.0",
-  "description": "HexaQuiz – Multiplayer hexagonal quiz race game",
+  "version": "2.0.0",
+  "description": "HexaQuiz – Turn-based multiplayer hex quiz royale",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
     "ws": "^8.16.0"
   }
 }
