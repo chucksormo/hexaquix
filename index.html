@@ -63,6 +63,11 @@ input.fi:focus{border-color:rgba(102,126,234,.5)}
 .hb{background:rgba(0,0,0,.55);padding:4px 11px;border-radius:10px;color:#fff;text-align:center;min-width:50px;border:1px solid rgba(255,255,255,.06)}
 .hb .hl{display:block;font-size:.45em;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,.3)}
 .hb .hv{font-family:'Fredoka One';font-size:1.2em;line-height:1.2}
+.hb.timer-box .hv{color:#FFD600}
+.hb.timer-box.urgent .hv{color:#F44336;animation:blink .5s infinite}
+.hb.shrink-warn{border-color:rgba(229,57,53,.5);animation:pulse-red .8s infinite}
+@keyframes blink{50%{opacity:.4}}
+@keyframes pulse-red{0%,100%{background:rgba(229,57,53,.1)}50%{background:rgba(229,57,53,.25)}}
 /* Phase banner */
 #phase{position:fixed;top:56px;left:50%;transform:translateX(-50%);z-index:55;font-family:'Fredoka One';font-size:clamp(.95em,2.5vw,1.2em);color:#FFD600;text-shadow:0 0 12px rgba(255,214,0,.3);transition:opacity .3s;pointer-events:none;white-space:nowrap}
 #phase.h{opacity:0}
@@ -168,9 +173,10 @@ input.fi:focus{border-color:rgba(102,126,234,.5)}
 
 <!-- HUD -->
 <div id="hud" class="h">
+  <div class="hb timer-box"><span class="hl">Time</span><span class="hv" id="h-time">—</span></div>
   <div class="hb"><span class="hl">Turn</span><span class="hv" id="h-turn">0</span></div>
   <div class="hb"><span class="hl">Alive</span><span class="hv" id="h-alive">0</span></div>
-  <div class="hb"><span class="hl">Shrink in</span><span class="hv" id="h-shrink">3</span></div>
+  <div class="hb" id="h-shrink-box"><span class="hl">Shrink in</span><span class="hv" id="h-shrink">3</span></div>
 </div>
 <div id="phase" class="h"></div>
 <div id="hint" class="h"><span id="hi-icon"></span><span id="hi-name"></span></div>
@@ -377,13 +383,34 @@ function onGameStart(m){
 }
 
 /* ═══ MOVE PHASE ═══ */
-let moveLocked=false;
+let moveLocked=false,phaseTimer=null,phaseStart=0,phaseDur=0;
+function startPhaseTimer(dur){
+  phaseDur=dur;phaseStart=performance.now();
+  clearInterval(phaseTimer);
+  const tb=document.querySelector('.timer-box');
+  phaseTimer=setInterval(()=>{
+    const left=Math.max(0,Math.ceil(dur-(performance.now()-phaseStart)/1000));
+    document.getElementById('h-time').textContent=left+'s';
+    if(left<=3)tb.classList.add('urgent');else tb.classList.remove('urgent');
+    if(left<=0)clearInterval(phaseTimer);
+  },200);
+  document.getElementById('h-time').textContent=dur+'s';
+  tb.classList.remove('urgent');
+}
+function stopPhaseTimer(){clearInterval(phaseTimer);document.getElementById('h-time').textContent='—';document.querySelector('.timer-box').classList.remove('urgent')}
+
 function onMovePhase(m){
   state='MOVE';selectedMove=null;moveLocked=false;turn=m.turn;
   adjHexes=m.adjacent;
-  updateHUD(m.turn,m.aliveCount,m.shrinkIn);
-  showPhase('🏃 MOVE — Pick a hex! ('+m.time+'s)');
-  adjHexes.forEach(h=>{const hex=hexGrid.get(hk(h.q,h.r));if(hex&&hex.mesh){hex.mesh.material.emissive.copy(hex.mesh.material.color);hex.mesh.material.emissiveIntensity=.2}});
+  const si=m.shrinkIn;
+  updateHUD(m.turn,m.aliveCount,si);
+  startPhaseTimer(m.time);
+  // Shrink warning when shrink is next turn
+  const sb=document.getElementById('h-shrink-box');
+  if(si<=1){sb.classList.add('shrink-warn');showPhase('⚠️ SHRINK AFTER THIS TURN! Pick wisely!')}
+  else{sb.classList.remove('shrink-warn');showPhase('🏃 MOVE — Pick a hex!')}
+  // Highlight adjacent hexes with brighter glow
+  adjHexes.forEach(h=>{const hex=hexGrid.get(hk(h.q,h.r));if(hex&&hex.mesh){hex.mesh.material.emissive.copy(hex.mesh.material.color);hex.mesh.material.emissiveIntensity=.25}});
   document.getElementById('hint').classList.remove('h');
   document.getElementById('hi-icon').textContent='👆';document.getElementById('hi-name').textContent='Pick hex to move (0/'+m.aliveCount+' locked)';
 }
@@ -397,9 +424,10 @@ function onPlayerLocked(m){
 /* ═══ QUESTION PHASE ═══ */
 function onQuestionPhase(m){
   state='QUESTION';qAns=false;
+  startPhaseTimer(m.time);
   adjHexes.forEach(h=>{const hex=hexGrid.get(hk(h.q,h.r));if(hex&&hex.mesh)hex.mesh.material.emissiveIntensity=0});
   document.getElementById('hint').classList.add('h');
-  showPhase('📝 ANSWER — '+m.time+'s!');
+  showPhase('📝 ANSWER!');
   document.getElementById('q-turn').textContent='Turn '+m.turn;
   document.getElementById('q-count').textContent='0/? answered';
   document.getElementById('q-q').textContent=m.q;
@@ -420,7 +448,7 @@ function ansQ(i){if(qAns)return;qAns=true;cancelAnimationFrame(qRAF);
 
 /* ═══ RESOLVE ═══ */
 function onResolve(m){
-  state='RESULT';
+  state='RESULT';stopPhaseTimer();
   document.querySelectorAll('#q-a .ab').forEach((b,j)=>{if(j===m.correctAnswer)b.classList.add('ok');else if(b.classList.contains('sel'))b.classList.add('no')});
   setTimeout(()=>document.getElementById('qp').classList.add('h'),1200);
   m.results.forEach(r=>{
@@ -465,8 +493,10 @@ function onDuelEnded(m){if(state!=='DUEL')toast('⚔️ Duel resolved',1500)}
 
 /* ═══ SHRINK ═══ */
 function onShrink(m){
+  stopPhaseTimer();
   document.getElementById('sw').classList.add('a');
-  setTimeout(()=>document.getElementById('sw').classList.remove('a'),2000);
+  document.getElementById('h-shrink-box').classList.remove('shrink-warn');
+  setTimeout(()=>document.getElementById('sw').classList.remove('a'),2500);
   m.fallingHexes.forEach(f=>{
     const k=hk(f.q,f.r),h=hexGrid.get(k);if(!h||!h.mesh)return;
     const mesh=h.mesh,by=mesh.position.y;
@@ -492,7 +522,7 @@ function onVictory(m){state='ENDED';hideGame();document.getElementById('w-msg').
 function onGameOver(m){if(state==='ENDED')return;toast('🏆 '+(m.winnerName||'Someone')+' wins!',3000)}
 function onPlayerLeft(m){const o=opps[m.idx];if(o){o.alive=false;if(o.mesh){scene.remove(o.mesh);o.mesh=null}}toast('🏃 '+m.name+' left',1500)}
 
-function hideGame(){['hud','hint','phase','qp','dp','spawn-ov'].forEach(id=>document.getElementById(id).classList.add('h'));document.getElementById('sw').classList.remove('a')}
+function hideGame(){['hud','hint','phase','qp','dp','spawn-ov'].forEach(id=>document.getElementById(id).classList.add('h'));document.getElementById('sw').classList.remove('a');stopPhaseTimer();hoveredHex=null}
 function updateHUD(t,a,s){document.getElementById('h-turn').textContent=t||turn;document.getElementById('h-alive').textContent=a||aliveCount;if(s!==undefined)document.getElementById('h-shrink').textContent=s}
 
 function goLobby(){
@@ -528,11 +558,31 @@ function mkChar(bc,hc){const g=new THREE.Group();g.add(new THREE.Mesh(new THREE.
 let lastRay=0;
 function getHK(cx,cy){mV.x=(cx/innerWidth)*2-1;mV.y=-(cy/innerHeight)*2+1;ray.setFromCamera(mV,camera);const hits=ray.intersectObjects(rayArr,false);if(hits.length){let o=hits[0].object;while(o&&!o.userData.hexKey)o=o.parent;if(o)return o.userData.hexKey}return null}
 
+let hoveredHex=null;
 renderer.domElement.addEventListener('mousemove',e=>{
   if(state!=='MOVE'&&state!=='SPAWN')return;const now=performance.now();if(now-lastRay<50)return;lastRay=now;
   const k=getHK(e.clientX,e.clientY);
-  if(state==='MOVE'&&k){const[q,r]=k.split(',').map(Number);const isAdj=adjHexes.some(h=>h.q===q&&h.r===r);
-    document.getElementById('hi-name').textContent=isAdj?'Click to move here':'(not adjacent)';
+  // Unhover previous
+  if(hoveredHex&&hoveredHex!==k){
+    const ph=hexGrid.get(hoveredHex);
+    if(ph&&ph.mesh){
+      const isAdj=adjHexes.some(h=>hk(h.q,h.r)===hoveredHex);
+      ph.mesh.material.emissiveIntensity=isAdj?.25:0;
+      ph.mesh.position.y=ph.baseY;
+    }
+    hoveredHex=null;
+  }
+  if(state==='MOVE'&&k&&!moveLocked){
+    const[q,r]=k.split(',').map(Number);
+    const isAdj=adjHexes.some(h=>h.q===q&&h.r===r);
+    if(isAdj){
+      hoveredHex=k;
+      const hh=hexGrid.get(k);
+      if(hh&&hh.mesh){hh.mesh.material.emissiveIntensity=.5;hh.mesh.position.y=hh.baseY+.12}
+      document.getElementById('hi-name').textContent='→ Click to move here';
+    } else {
+      document.getElementById('hi-name').textContent='(not adjacent)';
+    }
   }
 });
 
@@ -550,9 +600,11 @@ renderer.domElement.addEventListener('click',e=>{
     if(!isAdj&&!isSame)return;
     moveLocked=true;
     sWS({type:'submit_move',q,r});
-    adjHexes.forEach(h=>{const hex=hexGrid.get(hk(h.q,h.r));if(hex&&hex.mesh)hex.mesh.material.emissiveIntensity=0});
-    const sel=hexGrid.get(k);if(sel&&sel.mesh){sel.mesh.material.emissive.set(0x667eea);sel.mesh.material.emissiveIntensity=.3}
-    document.getElementById('hint').classList.add('h');
+    // Clear all highlights, mark selected
+    adjHexes.forEach(h=>{const hex=hexGrid.get(hk(h.q,h.r));if(hex&&hex.mesh){hex.mesh.material.emissiveIntensity=0;hex.mesh.position.y=hex.baseY}});
+    const sel=hexGrid.get(k);if(sel&&sel.mesh){sel.mesh.material.emissive.set(0x4CAF50);sel.mesh.material.emissiveIntensity=.5;sel.mesh.position.y=sel.baseY+.15}
+    document.getElementById('hint').classList.remove('h');
+    document.getElementById('hi-icon').textContent='✓';document.getElementById('hi-name').textContent='Move locked in!';
   }
 });
 
