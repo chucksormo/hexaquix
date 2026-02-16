@@ -606,7 +606,7 @@ function buildRaceTrack(players,steps){
     // Drop animation
     ch.position.y=CFG.HEX_HEIGHT+4;
     tw(.6,eOB,t=>{ch.position.y=lerp(CFG.HEX_HEIGHT+4,CFG.HEX_HEIGHT,t)},null,.3+li*.1);
-    raceChars[players[li].idx]={mesh:ch,lane:li,pos:0,x:px};
+    raceChars[players[li].idx]={mesh:ch,lane:li,pos:0,x:px,targetZ:0};
     if(players[li].idx===myIdx)player=ch;
   }
   // Finish line banner (simple bar above step 10)
@@ -617,19 +617,19 @@ function buildRaceTrack(players,steps){
 
 function raceCharToPos(idx,pos,animate){
   const rc=raceChars[idx];if(!rc)return;
-  const stepSpacing=TILE_D+TILE_GAP;
-  const targetZ=-(pos*stepSpacing);
-  if(animate){
-    const fromZ=rc.mesh.position.z;
+  const ss=TILE_D+TILE_GAP;
+  const tz=-(pos*ss);
+  const fromZ=rc.targetZ; // use tracked position, not mesh (may be mid-animation)
+  rc.targetZ=tz;rc.pos=pos;
+  if(animate&&fromZ!==tz){
     tw(.45,eOC,t=>{
-      rc.mesh.position.z=lerp(fromZ,targetZ,t);
-      rc.mesh.position.y=CFG.HEX_HEIGHT+Math.sin(t*Math.PI)*.8;
-      const s=1+Math.sin(t*Math.PI)*.1;rc.mesh.scale.set(1/s,s,1/s);
-    },()=>{rc.mesh.scale.set(1,1,1);rc.mesh.position.y=CFG.HEX_HEIGHT;rc.mesh.position.z=targetZ});
+      rc.mesh.position.z=lerp(fromZ,tz,t);
+      rc.mesh.position.y=CFG.HEX_HEIGHT+Math.sin(t*Math.PI)*.7;
+      const s=1+Math.sin(t*Math.PI)*.08;rc.mesh.scale.set(1/s,s,1/s);
+    },()=>{rc.mesh.scale.set(1,1,1);rc.mesh.position.y=CFG.HEX_HEIGHT;rc.mesh.position.z=tz});
   } else {
-    rc.mesh.position.z=targetZ;
+    rc.mesh.position.z=tz;
   }
-  rc.pos=pos;
 }
 
 function onRaceStart(m){
