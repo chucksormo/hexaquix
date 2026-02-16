@@ -394,7 +394,7 @@ function resolveRace(room){
     const gotRight=ans===correct;
     const oldPos=p.pos;
     if(gotRight)p.pos=Math.min(RACE_STEPS,p.pos+1);
-    else if(ans!==undefined)p.pos=Math.max(0,p.pos-1); // wrong = back. no answer = stay
+    // wrong or no answer = stay put
     results.push({idx:p.idx,name:p.name,correct:gotRight,answered:ans!==undefined,oldPos,newPos:p.pos});
     if(p.pos>=RACE_STEPS)atFinish.push(p.idx);
   });
