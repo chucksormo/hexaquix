@@ -55,7 +55,10 @@ function generateGrid(){
 async function generateQuiz(theme){
   const isNorwegian = /[æøåÆØÅ]/.test(theme) || /norsk|norweg|norge/i.test(theme);
   const lang = isNorwegian ? 'Norwegian' : 'the same language as the theme';
-  const prompt = `Generate at least 50 fun multiple-choice quiz questions about: "${theme}".
+  const isMeeting = theme.startsWith('Meeting Quiz:');
+  const prompt = isMeeting
+    ? `Based on these meeting notes, generate at least 50 fun multiple-choice quiz questions that test who paid attention during the meeting. Make them fun, specific to what was discussed, and entertaining. Notes:\n\n${theme.slice(14)}\n\nWrite in ${lang}.\nReturn ONLY valid JSON: {"questions":[{"q":"Question?","options":["A","B","C","D"],"correct":0}]}\n"correct" = 0-based index. Exactly 4 options each. At least 50 questions.`
+    : `Generate at least 50 fun multiple-choice quiz questions about: "${theme}".
 Write all questions and answers in ${lang}.
 Return ONLY valid JSON, no markdown, no code fences, no explanation before or after.
 Format: {"questions":[{"q":"Question?","options":["A","B","C","D"],"correct":0}]}
@@ -65,7 +68,7 @@ Make questions fun, varied difficulty, entertaining. You MUST return at least 50
   console.log(`  🧠 Generating quiz for theme: "${theme}"...`);
   const msg = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 12000,
+    max_tokens: 16000,
     messages: [{ role: 'user', content: prompt }],
   });
   const text = msg.content[0].text.trim();
@@ -356,7 +359,7 @@ async function startRaceGame(room){
   room.duelQIdx=0;
   room.raceQIdx=0;
   room.ended=false;
-  room._duelMap={};room._activeDuels=0;
+  room._duelMap={};room._activeDuels=0;room._raceResolved=false;
   room.players.forEach(p=>{p.alive=true;p.pos=0;});
 
   const roster=room.players.map(p=>({name:p.name,idx:p.idx}));
@@ -367,6 +370,7 @@ async function startRaceGame(room){
 
 function raceNextQuestion(room){
   if(room.ended)return;
+  room._raceResolved=false;
   const q=room.raceQuestions[room.raceQIdx%room.raceQuestions.length];
   room.raceQIdx++;
   room._currentQ=q;
@@ -514,7 +518,7 @@ wss.on('connection',ws=>{
     case 'create_room':{
       if(ws.room)leaveRoom(ws);
       ws.pname=String(msg.name||'Anon').slice(0,16);
-      const theme=String(msg.theme||'General Knowledge').slice(0,80);
+      const theme=String(msg.theme||'General Knowledge').slice(0,3000);
       const mode=msg.mode==='race'?'race':'royale';
       const code=genCode();
       const room={code,theme,mode,hostIdx:0,
@@ -542,7 +546,7 @@ wss.on('connection',ws=>{
     }
     case 'set_theme':{
       const room=ws.room;if(!room||room.started||ws.pidx!==room.hostIdx)break;
-      room.theme=String(msg.theme||'General Knowledge').slice(0,80);
+      room.theme=String(msg.theme||'General Knowledge').slice(0,3000);
       sendRoomUpdate(room);break;
     }
     case 'start_game':{

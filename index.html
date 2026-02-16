@@ -129,7 +129,11 @@ input.fi:focus{border-color:rgba(102,126,234,.5)}
     </div>
     <!-- Create panel -->
     <div id="p-create" style="width:100%;display:flex;flex-direction:column;gap:10px">
-      <input id="i-theme" class="fi" placeholder="Quiz theme (e.g. Harry Potter, 90s nostalgi)" maxlength="80" autocomplete="off">
+      <input id="i-theme" class="fi" placeholder="Quiz theme (e.g. Harry Potter, 90s nostalgi)" maxlength="120" autocomplete="off">
+      <details style="width:100%">
+        <summary style="color:rgba(255,255,255,.35);font-size:.8em;cursor:pointer;margin-bottom:6px">📋 Or paste meeting notes for a post-meeting quiz</summary>
+        <textarea id="i-notes" class="fi" placeholder="Paste meeting notes here — AI will generate fun quiz questions based on what was discussed…" style="min-height:80px;max-height:160px;resize:vertical;text-align:left;font-size:.85em;line-height:1.4"></textarea>
+      </details>
       <div class="tabs" style="margin:0"><button class="tab active" id="mt-royale">⚔️ Royale</button><button class="tab" id="mt-race">🏁 Race</button></div>
       <button id="b-create" class="bt">🎮 Create Room</button>
     </div>
@@ -281,8 +285,9 @@ document.getElementById('mt-royale').addEventListener('click',()=>{createMode='r
 document.getElementById('mt-race').addEventListener('click',()=>{createMode='race';document.getElementById('mt-race').classList.add('active');document.getElementById('mt-royale').classList.remove('active')});
 document.getElementById('b-create').addEventListener('click',()=>{
   const n=document.getElementById('i-name').value.trim();if(!n){document.getElementById('i-name').focus();toast('Enter your name!');return}
-  const t=document.getElementById('i-theme').value.trim()||'General Knowledge';
-  myName=n;connectWS(()=>sWS({type:'create_room',name:n,theme:t,mode:createMode}));
+  const notes=document.getElementById('i-notes')?.value?.trim()||'';
+  const theme=notes?'Meeting Quiz: '+notes.slice(0,2000):(document.getElementById('i-theme').value.trim()||'General Knowledge');
+  myName=n;connectWS(()=>sWS({type:'create_room',name:n,theme:theme,mode:createMode}));
 });
 document.getElementById('b-join').addEventListener('click',()=>{
   const n=document.getElementById('i-name').value.trim();if(!n){document.getElementById('i-name').focus();toast('Enter your name!');return}
@@ -358,7 +363,7 @@ function showLoading(theme){
 /* ═══ SPAWN ═══ */
 function onSpawnPhase(m){
   document.getElementById('loading').classList.add('h');
-  state='SPAWN';spawnMarkers=[];
+  state='SPAWN';gm='royale';spawnMarkers=[];
   buildGrid(m.grid);animEntry();
   document.getElementById('spawn-ov').classList.remove('h');
   let t=m.spawnTime||10;document.getElementById('sp-timer').textContent=t;
@@ -375,9 +380,9 @@ function onSpawnSel(m){
 
 /* ═══ GAME START ═══ */
 function onGameStart(m){
+  gm='royale'; // ensure mode is set for royale
   document.getElementById('spawn-ov').classList.add('h');
   clearInterval(spawnIv);zoomT=1;
-  // Remove spawn markers
   spawnMarkers.forEach(mk=>scene.remove(mk));spawnMarkers=[];
   m.players.forEach(p=>{
     const c=pCol(p.idx),mesh=mkChar(c.b,c.h);
@@ -569,7 +574,7 @@ function mkChar(bc,hc){const g=new THREE.Group();g.add(new THREE.Mesh(new THREE.
 
 /* ═══ RACE MODE ═══ */
 let raceLanes=[],raceChars={},raceTiles=[];
-const TILE_W=1.1,TILE_D=1.1,LANE_GAP=.3;
+const TILE_W=1.0,TILE_D=1.0,TILE_GAP=.35,LANE_GAP=.5;
 
 function buildRaceTrack(players,steps){
   // Clear old scene objects
@@ -579,25 +584,23 @@ function buildRaceTrack(players,steps){
   const totalW=nPlayers*(TILE_W+LANE_GAP)-LANE_GAP;
   const startX=-totalW/2+TILE_W/2;
 
+  const stepSpacing=TILE_D+TILE_GAP;
   for(let li=0;li<nPlayers;li++){
     const px=startX+li*(TILE_W+LANE_GAP);
     const col=pCol(players[li].idx);
     for(let s=0;s<=steps;s++){
-      const pz=-(s*TILE_D*1.05);
+      const pz=-(s*stepSpacing);
       const isFinish=s===steps;
       const tileCol=isFinish?0xFFD700:new THREE.Color(col.c).getHex();
       const g=new THREE.BoxGeometry(TILE_W,.15,TILE_D);
       const mat=new THREE.MeshLambertMaterial({color:tileCol,emissive:0x000000});
-      if(!isFinish)mat.color.multiplyScalar(.5+.5*(s/steps));
+      if(!isFinish)mat.color.multiplyScalar(.4+.6*(s/steps));
       const mesh=new THREE.Mesh(g,mat);
       mesh.position.set(px,.075,pz);mesh.receiveShadow=true;scene.add(mesh);
       raceTiles.push({mesh,lane:li,step:s});
-      // Entrance animation
       const ty=mesh.position.y;mesh.position.y=-5;
       tw(.5,eOB,t=>{mesh.position.y=lerp(-5,ty,t)},null,s*.03+li*.05);
     }
-    // Step numbers on the side
-    // Player character
     const ch=mkChar(col.b,col.h);
     ch.position.set(px,CFG.HEX_HEIGHT,0);scene.add(ch);
     // Drop animation
@@ -608,20 +611,21 @@ function buildRaceTrack(players,steps){
   }
   // Finish line banner (simple bar above step 10)
   const banner=new THREE.Mesh(new THREE.BoxGeometry(totalW+.5,.08,.15),new THREE.MeshLambertMaterial({color:0xFFD600,emissive:0xFFAA00,emissiveIntensity:.5}));
-  banner.position.set(0,.8,-(steps*TILE_D*1.05));scene.add(banner);
+  banner.position.set(0,.8,-(steps*stepSpacing));scene.add(banner);
   raceTiles.push({mesh:banner,lane:-1,step:-1}); // track for cleanup
 }
 
 function raceCharToPos(idx,pos,animate){
   const rc=raceChars[idx];if(!rc)return;
-  const targetZ=-(pos*TILE_D*1.05);
+  const stepSpacing=TILE_D+TILE_GAP;
+  const targetZ=-(pos*stepSpacing);
   if(animate){
-    const fromZ=rc.mesh.position.z,fromY=rc.mesh.position.y;
-    tw(.4,eOC,t=>{
+    const fromZ=rc.mesh.position.z;
+    tw(.45,eOC,t=>{
       rc.mesh.position.z=lerp(fromZ,targetZ,t);
-      rc.mesh.position.y=CFG.HEX_HEIGHT+Math.sin(t*Math.PI)*1.2;
+      rc.mesh.position.y=CFG.HEX_HEIGHT+Math.sin(t*Math.PI)*.8;
       const s=1+Math.sin(t*Math.PI)*.1;rc.mesh.scale.set(1/s,s,1/s);
-    },()=>{rc.mesh.scale.set(1,1,1);rc.mesh.position.y=CFG.HEX_HEIGHT});
+    },()=>{rc.mesh.scale.set(1,1,1);rc.mesh.position.y=CFG.HEX_HEIGHT;rc.mesh.position.z=targetZ});
   } else {
     rc.mesh.position.z=targetZ;
   }
@@ -752,11 +756,10 @@ function animate(){
   tickTw(dt);
   if(state==='LOBBY'){camA+=dt*.3;camera.position.set(Math.cos(camA)*20,CFG.CAM_H*1.1,Math.sin(camA)*20);camera.lookAt(0,1,0)}
   else if(gm==='race'){
-    // Race camera: angled view looking down the track
     zoom=lerp(zoom,zoomT,8*dt);const z=1/zoom;
-    const rc=raceChars[myIdx];const mz=rc?-(rc.pos*TILE_D*1.05):0;
+    const rc=raceChars[myIdx];const ss=TILE_D+TILE_GAP;const mz=rc?-(rc.pos*ss):0;
     _camOff.set(0,10*z,mz+8*z);camera.position.lerp(_camOff,3*dt);
-    _camLook.set(0,.5,mz-3);camTgt.lerp(_camLook,3*dt);camera.lookAt(camTgt);
+    _camLook.set(0,.5,mz-4);camTgt.lerp(_camLook,3*dt);camera.lookAt(camTgt);
   } else{zoom=lerp(zoom,zoomT,8*dt);const z=1/zoom;const wp=h2w(pQ,pR);
     _camOff.set(wp.x+CFG.CAM_D*.7*z,CFG.CAM_H*z,wp.z+CFG.CAM_D*.7*z);camera.position.lerp(_camOff,3.5*dt);
     _camLook.set(wp.x,1,wp.z);camTgt.lerp(_camLook,3.5*dt);camera.lookAt(camTgt)}
